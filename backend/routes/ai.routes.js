@@ -5,7 +5,7 @@ import roleGuard from '../middleware/roleGuard.js';
 const router = express.Router();
 
 // Post-processing text sanitizer to strip word counts, meta notes, and conversational filler
-const cleanCopyText = (text) => {
+export const cleanCopyText = (text) => {
   if (!text || typeof text !== 'string') return '';
   return text
     // Remove (Word count: XX), (XX words), Word count: XX, Words: XX, etc.

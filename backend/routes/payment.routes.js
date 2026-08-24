@@ -3,6 +3,7 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import roleGuard from '../middleware/roleGuard.js';
+import { generateAICopy, cleanCopyText } from './ai.routes.js';
 
 const router = express.Router();
 
@@ -505,6 +506,200 @@ router.get('/delhivery/pincode/:pincode', async (req, res) => {
   } catch (error) {
     console.error("Delhivery pincode serviceability check failed:", error);
     res.status(500).json({ success: false, message: "Delhivery API check failed", error: error.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+// AI DELIVERY INTELLIGENCE & DISPATCH COPILOT ENDPOINTS
+// ════════════════════════════════════════════════════════════════
+
+// POST /api/payment/ai-delivery-analyze
+// Analyze shipping address, assess RTO risk, recommend optimal courier, and generate WhatsApp notification
+router.post('/ai-delivery-analyze', roleGuard(['admin', 'editor']), async (req, res) => {
+  const {
+    shippingAddress = '',
+    pincode = '',
+    carrier = '',
+    trackingId = '',
+    customerName = 'Customer',
+    customerPhone = '',
+    orderId = '',
+    totalAmount = 0,
+    items = []
+  } = req.body;
+
+  if (!shippingAddress.trim()) {
+    return res.status(400).json({ success: false, message: 'Shipping address is required' });
+  }
+
+  const prompt = `You are NilexCart's AI Delivery & Logistics Engine.
+Analyze the following Indian e-commerce order and address for dispatch:
+
+ORDER DATA:
+- Customer Name: ${customerName}
+- Shipping Address: "${shippingAddress}"
+- Pincode: ${pincode || 'Extracted from address if available'}
+- Current Carrier: ${carrier || 'Unassigned'}
+- Tracking ID / AWB: ${trackingId || 'Pending'}
+- Order ID: ${orderId}
+- Total Order Value: ₹${totalAmount}
+- Total Items: ${Array.isArray(items) ? items.length : 1}
+
+TASKS:
+1. Standardize and clean the address (fix formatting, proper casing, highlight missing landmarks or street info).
+2. Calculate RTO (Return-to-Origin) Risk Score (0-100%) and rate it ("Low", "Moderate", "High Risk") with concise reasons.
+3. Recommend the optimal Indian courier partner (BlueDart, Delhivery Express, DHL Express, or FedEx) considering cost, speed, and order value with estimated transit days and cost in INR.
+4. Generate a polite, branded customer WhatsApp dispatch notification message including the tracking link (https://nilex.in/track/${trackingId || 'AWB'}).
+
+Return strictly valid JSON matching this schema:
+{
+  "cleanedAddress": "Formatted, standardized delivery address",
+  "pincode": "Extracted 6-digit Indian pincode",
+  "rtoRiskScore": 15,
+  "rtoRiskLevel": "Low",
+  "rtoRiskReason": "Concise 1-sentence risk explanation",
+  "recommendedCarrier": "Delhivery Express",
+  "estimatedTransitDays": "2-3 days",
+  "estimatedShippingCost": 65,
+  "carrierReason": "Lowest shipping cost and high SLA reliability for this pincode.",
+  "whatsAppMessage": "Formatted WhatsApp text with emojis ready to send to customer"
+}`;
+
+  const deliverySchema = {
+    type: 'OBJECT',
+    properties: {
+      cleanedAddress: { type: 'STRING' },
+      pincode: { type: 'STRING' },
+      rtoRiskScore: { type: 'NUMBER' },
+      rtoRiskLevel: { type: 'STRING' },
+      rtoRiskReason: { type: 'STRING' },
+      recommendedCarrier: { type: 'STRING' },
+      estimatedTransitDays: { type: 'STRING' },
+      estimatedShippingCost: { type: 'NUMBER' },
+      carrierReason: { type: 'STRING' },
+      whatsAppMessage: { type: 'STRING' }
+    },
+    required: [
+      'cleanedAddress',
+      'rtoRiskScore',
+      'rtoRiskLevel',
+      'recommendedCarrier',
+      'whatsAppMessage'
+    ]
+  };
+
+  try {
+    const rawResponse = await generateAICopy(
+      prompt,
+      true,
+      deliverySchema,
+      'You are an AI logistics dispatch optimizer. Output strictly valid JSON only.'
+    );
+
+    let parsed = {};
+    try {
+      const clean = rawResponse.replace(/```json|```/gi, '').trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      parsed = {
+        cleanedAddress: shippingAddress,
+        rtoRiskScore: 20,
+        rtoRiskLevel: 'Low',
+        rtoRiskReason: 'Address format accepted.',
+        recommendedCarrier: carrier || 'Delhivery Express',
+        estimatedTransitDays: '3-4 days',
+        estimatedShippingCost: 65,
+        carrierReason: 'Standard fast delivery.',
+        whatsAppMessage: `Hi ${customerName}! 📦 Your NilexCart order #${orderId} has been dispatched via ${carrier || 'Delhivery Express'}. Tracking AWB: ${trackingId || 'In Transit'}. Track live: https://nilex.in/track/${trackingId || ''}`
+      };
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        cleanedAddress: parsed.cleanedAddress || shippingAddress,
+        pincode: parsed.pincode || pincode,
+        rtoRiskScore: parsed.rtoRiskScore ?? 15,
+        rtoRiskLevel: parsed.rtoRiskLevel || 'Low',
+        rtoRiskReason: parsed.rtoRiskReason || 'Address has valid structure.',
+        recommendedCarrier: parsed.recommendedCarrier || 'Delhivery Express',
+        estimatedTransitDays: parsed.estimatedTransitDays || '2-4 days',
+        estimatedShippingCost: parsed.estimatedShippingCost || 60,
+        carrierReason: parsed.carrierReason || 'Optimal courier for speed and price.',
+        whatsAppMessage: parsed.whatsAppMessage || `Hi ${customerName}! Your order #${orderId} is on its way with ${carrier || 'Delhivery Express'}!`
+      }
+    });
+
+  } catch (err) {
+    console.error('AI Delivery analysis failed:', err);
+    if (err.message === 'MISSING_API_KEY') {
+      return res.status(503).json({
+        success: false,
+        message: 'Gemini API key is missing. Add GEMINI_API_KEY to your backend .env.'
+      });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/payment/ai-delivery-ask
+// Natural language and voice query assistant for warehouse & dispatch operations
+router.post('/ai-delivery-ask', roleGuard(['admin', 'editor']), async (req, res) => {
+  const { query } = req.body;
+  if (!query?.trim()) {
+    return res.status(400).json({ success: false, message: 'Query is required' });
+  }
+
+  try {
+    const orders = await Order.find({}).lean();
+    
+    const totalOrders = orders.length;
+    const statusCounts = {};
+    const carrierCounts = {};
+    let totalRevenue = 0;
+    let pendingCount = 0;
+    let inTransitCount = 0;
+    let deliveredCount = 0;
+
+    orders.forEach(o => {
+      const status = o.deliveryStatus || 'Processing';
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+      
+      const carr = o.carrier || 'Unassigned';
+      carrierCounts[carr] = (carrierCounts[carr] || 0) + 1;
+      
+      totalRevenue += o.totalAmount || 0;
+      if (status === 'Processing' || status === 'Confirmed' || status === 'Packed') pendingCount++;
+      if (status === 'Shipped' || status === 'In Transit' || status === 'Out for Delivery') inTransitCount++;
+      if (status === 'Delivered') deliveredCount++;
+    });
+
+    const context = `LOGISTICS & DISPATCH SUMMARY:
+- Total Orders: ${totalOrders}
+- Total Order Value: ₹${totalRevenue.toLocaleString('en-IN')}
+- Pending Dispatch: ${pendingCount}
+- Active In-Transit / Shipped: ${inTransitCount}
+- Delivered: ${deliveredCount}
+- Status Breakdown: ${JSON.stringify(statusCounts)}
+- Courier Breakdown: ${JSON.stringify(carrierCounts)}
+- Recent 10 Orders:
+${orders.slice(-10).map(o => `[#${String(o._id).slice(-6)}] Customer: ${o.email} | Amount: ₹${o.totalAmount} | Status: ${o.deliveryStatus || 'Processing'} | Carrier: ${o.carrier || 'None'} | AWB: ${o.trackingId || 'None'} | Address: ${o.shippingAddress || 'N/A'}`).join('\n')}`;
+
+    const prompt = `You are NilexCart's AI Delivery Logistics Operations Copilot.
+Answer the admin's delivery/order question accurately and concisely based on the data below.
+
+${context}
+
+Admin Question: "${query.trim()}"
+
+Provide a direct, helpful, professional, and voice-friendly response.`;
+
+    const answer = await generateAICopy(prompt, false);
+    return res.json({ success: true, answer: cleanCopyText(answer) });
+
+  } catch (err) {
+    console.error('AI Delivery ask failed:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 

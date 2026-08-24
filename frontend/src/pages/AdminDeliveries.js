@@ -44,6 +44,15 @@ const AdminDeliveries = () => {
   const [checkingPincode, setCheckingPincode] = useState(false);
   const [pincodeResult, setPincodeResult] = useState(null);
 
+  // AI Delivery Copilot states
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [aiDeliveryData, setAiDeliveryData] = useState(null);
+  const [deliveryQuery, setDeliveryQuery] = useState("");
+  const [deliveryAnswering, setDeliveryAnswering] = useState(false);
+  const [deliveryAnswer, setDeliveryAnswer] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useState(null);
+
   // Redirect if not logged in
   useEffect(() => {
     if (!currentUser) {
@@ -124,6 +133,129 @@ const AdminDeliveries = () => {
     } finally {
       setCheckingPincode(false);
     }
+  };
+
+  // ── Voice & Text "Ask Delivery AI" ─────────────────
+  const toggleVoiceSearch = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.info("Voice recognition is not supported in this browser.");
+      return;
+    }
+
+    if (isListening) {
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-IN";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => setIsListening(true);
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => setIsListening(false);
+      recognition.onresult = (e) => {
+        const transcript = e.results[0][0].transcript;
+        setDeliveryQuery(transcript);
+        handleAskDeliveryAi(transcript);
+      };
+
+      recognition.start();
+    } catch (e) {
+      setIsListening(false);
+    }
+  };
+
+  const handleAskDeliveryAi = async (customQuery) => {
+    const q = (customQuery || deliveryQuery).trim();
+    if (!q) return;
+
+    setDeliveryAnswering(true);
+    setDeliveryAnswer("");
+    try {
+      const res = await adminFetch("/api/payment/ai-delivery-ask", {
+        method: "POST",
+        body: JSON.stringify({ query: q }),
+      });
+      if (res.success) {
+        setDeliveryAnswer(res.answer);
+      } else {
+        toast.error(`Delivery AI error: ${res.message}`);
+      }
+    } catch (err) {
+      toast.error(`Delivery AI error: ${err.message}`);
+    } finally {
+      setDeliveryAnswering(false);
+    }
+  };
+
+  // ── AI Order & Address Analysis ────────────────────
+  const runAiDeliveryAnalysis = async () => {
+    if (!shippingAddress.trim()) {
+      toast.error("Please enter or select a shipping address first.");
+      return;
+    }
+
+    setAiAnalyzing(true);
+    try {
+      const res = await adminFetch("/api/payment/ai-delivery-analyze", {
+        method: "POST",
+        body: JSON.stringify({
+          shippingAddress,
+          pincode: lookupPincode,
+          carrier,
+          trackingId,
+          customerName: selectedOrder?.email?.split("@")[0] || "Customer",
+          customerPhone: selectedOrder?.phone || "",
+          orderId: selectedOrder?._id ? String(selectedOrder._id).slice(-6) : "",
+          totalAmount: selectedOrder?.totalAmount || 0,
+          items: selectedOrder?.items || [],
+        }),
+      });
+
+      if (res.success && res.data) {
+        setAiDeliveryData(res.data);
+        if (res.data.pincode && !lookupPincode) {
+          setLookupPincode(res.data.pincode);
+        }
+        toast.success("✨ AI Delivery analysis complete!");
+      } else {
+        toast.error(`AI analysis failed: ${res.message}`);
+      }
+    } catch (err) {
+      toast.error(`AI analysis error: ${err.message}`);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  };
+
+  const applyCleanedAddress = () => {
+    if (aiDeliveryData?.cleanedAddress) {
+      setShippingAddress(aiDeliveryData.cleanedAddress);
+      toast.success("✅ Cleaned address applied!");
+    }
+  };
+
+  const applyRecommendedCarrier = () => {
+    if (aiDeliveryData?.recommendedCarrier) {
+      setCarrier(aiDeliveryData.recommendedCarrier);
+      toast.success(`🚚 Selected ${aiDeliveryData.recommendedCarrier}!`);
+    }
+  };
+
+  const openWhatsAppDispatch = () => {
+    if (!aiDeliveryData?.whatsAppMessage) {
+      toast.info("Run AI analysis first to generate WhatsApp message.");
+      return;
+    }
+    const phone = selectedOrder?.phone || "";
+    const cleanPhone = phone.replace(/[^\d]/g, "");
+    const encoded = encodeURIComponent(aiDeliveryData.whatsAppMessage);
+    const url = cleanPhone ? `https://wa.me/91${cleanPhone}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
+    window.open(url, "_blank");
   };
 
   // Submit the delivery updates
@@ -247,6 +379,81 @@ const AdminDeliveries = () => {
               <div className="ad-kpi-lbl">Completed Hand-offs</div>
             </div>
           </div>
+        </div>
+
+        {/* ── 🎙️ Voice & Text "Ask Delivery AI Operations Copilot" ── */}
+        <div className="ad-ai-ask-card mb-4">
+          <div className="d-flex align-items-center gap-3 flex-wrap">
+            <div className="ad-ai-icon">🚚</div>
+            <div className="flex-grow-1">
+              <h6 className="ad-ai-title mb-1">🎙️ AI Delivery Operations Copilot</h6>
+              <p className="ad-ai-sub mb-0">Ask questions about shipments, pending dispatches, courier SLA, and high-value orders.</p>
+            </div>
+            <button
+              type="button"
+              className={`ad-voice-mic-btn ${isListening ? "listening" : ""}`}
+              onClick={toggleVoiceSearch}
+              title={isListening ? "Listening... Click to stop" : "Speak your query with voice"}
+            >
+              🎙️ {isListening ? "Listening..." : "Speak"}
+            </button>
+          </div>
+
+          <form
+            className="d-flex gap-2 mt-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleAskDeliveryAi();
+            }}
+          >
+            <input
+              type="text"
+              className="ad-ai-input flex-grow-1"
+              value={deliveryQuery}
+              onChange={(e) => setDeliveryQuery(e.target.value)}
+              placeholder="e.g. Which orders are pending dispatch today? Or show courier breakdown..."
+              disabled={deliveryAnswering}
+            />
+            <button
+              type="submit"
+              className="ad-ai-submit-btn"
+              disabled={!deliveryQuery.trim() || deliveryAnswering}
+            >
+              {deliveryAnswering ? "Analyzing..." : "Ask AI"}
+            </button>
+          </form>
+
+          {/* Quick query chips */}
+          <div className="ad-ai-chips mt-2">
+            {[
+              "📦 What orders are pending dispatch?",
+              "🚚 Courier partner breakdown",
+              "⚠️ Any high-value orders in transit?",
+              "📍 Show delivery performance summary"
+            ].map((chip, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className="ad-ai-chip"
+                onClick={() => {
+                  setDeliveryQuery(chip);
+                  handleAskDeliveryAi(chip);
+                }}
+                disabled={deliveryAnswering}
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+
+          {deliveryAnswer && (
+            <div className="ad-ai-answer-box mt-3">
+              <div className="d-flex align-items-center gap-2 mb-1">
+                <span className="badge bg-primary">✨ Delivery AI Answer</span>
+              </div>
+              <p className="ad-ai-answer-text mb-0">{deliveryAnswer}</p>
+            </div>
+          )}
         </div>
 
         {/* ── Search and Filter Controls ── */}
@@ -418,6 +625,107 @@ const AdminDeliveries = () => {
                     onChange={e => setShippingAddress(e.target.value)}
                     placeholder="Enter precise customer delivery address..."
                   />
+                </div>
+
+                {/* ✨ AI Delivery & Address Copilot Card */}
+                <div className="col-12">
+                  <div className="ad-ai-copilot-card p-3 rounded border">
+                    <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                      <div className="d-flex align-items-center gap-2">
+                        <span className="fs-5">✨</span>
+                        <div>
+                          <strong className="d-block" style={{ fontSize: '13.5px', color: '#0f172a' }}>
+                            AI Delivery &amp; RTO Shield Copilot
+                          </strong>
+                          <span className="text-muted" style={{ fontSize: '11.5px' }}>
+                            Standardizes address, predicts RTO failure risk &amp; finds best courier rate
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="ad-ai-analyze-btn"
+                        onClick={runAiDeliveryAnalysis}
+                        disabled={aiAnalyzing || !shippingAddress.trim()}
+                      >
+                        {aiAnalyzing ? "✨ Analyzing..." : "✨ Run AI Delivery Analysis"}
+                      </button>
+                    </div>
+
+                    {aiDeliveryData && (
+                      <div className="ad-ai-results mt-3 p-3 bg-white rounded border">
+                        {/* 1. Address & RTO */}
+                        <div className="row g-2 mb-3">
+                          <div className="col-md-7">
+                            <div className="small text-muted mb-1 fw-bold">📍 Standardized Delivery Address:</div>
+                            <div className="p-2 rounded bg-light border text-dark small">
+                              {aiDeliveryData.cleanedAddress}
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-primary mt-1 py-0 px-2"
+                              style={{ fontSize: '11px' }}
+                              onClick={applyCleanedAddress}
+                            >
+                              ✅ Apply Clean Address
+                            </button>
+                          </div>
+
+                          <div className="col-md-5">
+                            <div className="small text-muted mb-1 fw-bold">🛡️ RTO Failure Risk Rating:</div>
+                            <div className="d-flex align-items-center gap-2">
+                              <span className={`badge ${
+                                aiDeliveryData.rtoRiskLevel === 'Low' ? 'bg-success' :
+                                aiDeliveryData.rtoRiskLevel === 'Moderate' ? 'bg-warning text-dark' : 'bg-danger'
+                              } px-2 py-1`}>
+                                {aiDeliveryData.rtoRiskScore}% {aiDeliveryData.rtoRiskLevel} Risk
+                              </span>
+                            </div>
+                            <p className="text-muted small mt-1 mb-0" style={{ fontSize: '11px' }}>
+                              {aiDeliveryData.rtoRiskReason}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* 2. Recommended Courier */}
+                        <div className="p-2 rounded bg-light border mb-3">
+                          <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div>
+                              <div className="small fw-bold text-dark">
+                                ⚡ Recommended Courier: <span className="text-primary">{aiDeliveryData.recommendedCarrier}</span>
+                              </div>
+                              <div className="text-muted small" style={{ fontSize: '11.5px' }}>
+                                ⏱️ {aiDeliveryData.estimatedTransitDays} • 💵 Approx ₹{aiDeliveryData.estimatedShippingCost} • {aiDeliveryData.carrierReason}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary py-1 px-2"
+                              style={{ fontSize: '11.5px' }}
+                              onClick={applyRecommendedCarrier}
+                            >
+                              🚚 Select {aiDeliveryData.recommendedCarrier}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 3. 1-Click WhatsApp Dispatch */}
+                        <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 pt-2 border-top">
+                          <span className="small text-muted">
+                            📲 Send tracking update directly to customer on WhatsApp
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-success py-1 px-3 fw-bold"
+                            style={{ fontSize: '12px', background: '#25D366', borderColor: '#25D366' }}
+                            onClick={openWhatsAppDispatch}
+                          >
+                            💬 Open in WhatsApp
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Delhivery Pincode Checker */}
