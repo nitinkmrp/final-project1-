@@ -3,52 +3,106 @@ import roleGuard from '../middleware/roleGuard.js';
 
 const router = express.Router();
 
-// Helper to call Google Gemini API directly
+// Helper to call Google Gemini API directly with dynamic model discovery & fallback
 const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
-  // Try gemini-1.5-flash first, fallback to gemini-2.0-flash or gemini-1.5-pro if needed
-  const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
-  let lastError = null;
+  const candidateModels = [
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-exp',
+    'gemini-2.5-flash',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-latest',
+    'gemini-pro'
+  ];
 
-  for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const payload = {
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          ...(isJson ? { responseMimeType: 'application/json' } : {})
+  const tryGenerate = async (modelName, useJson) => {
+    const cleanModel = modelName.replace(/^models\//, '');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+    const payload = {
+      contents: [
+        {
+          parts: [{ text: prompt }]
         }
-      };
+      ],
+      generationConfig: {
+        temperature: 0.7,
+        ...(useJson ? { responseMimeType: 'application/json' } : {})
+      }
+    };
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
 
-      const data = await res.json();
+    const data = await res.json();
+    return { ok: res.ok, status: res.status, data };
+  };
 
-      if (!res.ok) {
-        const errorMsg = data?.error?.message || `Google Gemini API error (${res.status})`;
-        lastError = new Error(errorMsg);
-        continue; // try next model if available
+  // 1. Try preferred candidate models
+  for (const model of candidateModels) {
+    try {
+      const result = await tryGenerate(model, isJson);
+      if (result.ok) {
+        const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (text) return text;
       }
 
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (text) {
-        return text;
+      // Check for permission or quota issues that shouldn't be retried
+      const errMsg = result.data?.error?.message || '';
+      const errStatus = result.data?.error?.status || '';
+      if (errStatus === 'PERMISSION_DENIED' || errMsg.includes('API key not valid') || errStatus === 'RESOURCE_EXHAUSTED') {
+        throw new Error(errMsg || 'Google Gemini API key permission denied or quota exhausted.');
+      }
+
+      // If JSON mode caused error, retry this model with plain text
+      if (isJson) {
+        const retryResult = await tryGenerate(model, false);
+        if (retryResult.ok) {
+          const text = retryResult.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (text) return text;
+        }
       }
     } catch (err) {
-      lastError = err;
+      if (err.message.includes('API key not valid') || err.message.includes('permission denied') || err.message.includes('quota')) {
+        throw err;
+      }
     }
   }
 
-  throw lastError || new Error('Failed to generate response from Google Gemini');
+  // 2. If candidate models failed, query ModelService.ListModels to see what models this key supports
+  try {
+    const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const listRes = await fetch(listUrl);
+    const listData = await listRes.json();
+
+    if (listRes.ok && Array.isArray(listData?.models)) {
+      const supportedModels = listData.models
+        .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+        .map(m => m.name);
+
+      console.log('[Gemini API] Available models for this key:', supportedModels);
+
+      for (const modelName of supportedModels) {
+        const result = await tryGenerate(modelName, false);
+        if (result.ok) {
+          const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (text) return text;
+        }
+      }
+    } else if (listData?.error?.message) {
+      throw new Error(listData.error.message);
+    }
+  } catch (err) {
+    if (err.message && !err.message.includes('fetch')) {
+      throw err;
+    }
+  }
+
+  throw new Error('Google Gemini API was unable to process the request. Please verify your GEMINI_API_KEY in Google AI Studio.');
 };
 
 // Helper to call OpenRouter API
