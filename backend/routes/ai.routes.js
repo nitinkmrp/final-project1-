@@ -23,7 +23,7 @@ const cleanCopyText = (text) => {
 };
 
 // Helper to call Google Gemini API directly with dynamic model discovery & fallback
-const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
+const callGeminiAPI = async (prompt, apiKey, isJson = false, customSchema = null, customInstruction = null) => {
   const candidateModels = [
     'gemini-1.5-flash',
     'gemini-1.5-flash-latest',
@@ -35,7 +35,8 @@ const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
     'gemini-pro'
   ];
 
-  const systemInstructionText = 'You are an expert e-commerce copywriter. Write highly engaging, conversion-optimized copy. NEVER include word counts, character counts, commentary, headers, or explanations in parentheses. Return ONLY direct customer-facing copy.';
+  const defaultInstruction = 'You are an expert e-commerce copywriter. Write highly engaging, conversion-optimized copy. NEVER include word counts, character counts, commentary, headers, or explanations in parentheses. Return ONLY direct customer-facing copy.';
+  const systemInstructionText = customInstruction || defaultInstruction;
 
   const tryGenerate = async (modelName, useJson) => {
     const cleanModel = modelName.replace(/^models\//, '');
@@ -43,19 +44,14 @@ const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
 
     const generationConfig = {
       temperature: 0.6,
-      maxOutputTokens: 400,
+      maxOutputTokens: 600,
     };
 
     if (useJson) {
       generationConfig.responseMimeType = 'application/json';
-      generationConfig.responseSchema = {
-        type: 'OBJECT',
-        properties: {
-          short: { type: 'STRING', description: 'Punchy one-line tagline' },
-          full: { type: 'STRING', description: 'Engaging product description' }
-        },
-        required: ['short', 'full']
-      };
+      if (customSchema) {
+        generationConfig.responseSchema = customSchema;
+      }
     }
 
     const payload = {
@@ -190,17 +186,17 @@ const callOpenRouterAPI = async (prompt, apiKey) => {
 };
 
 // Unified dispatcher: determines whether to call Google Gemini or OpenRouter
-export const generateAICopy = async (prompt, isJson = false) => {
+export const generateAICopy = async (prompt, isJson = false, customSchema = null, customInstruction = null) => {
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   const openRouterKey = process.env.OPENROUTER_API_KEY || '';
 
   if (geminiKey) {
-    return await callGeminiAPI(prompt, geminiKey, isJson);
+    return await callGeminiAPI(prompt, geminiKey, isJson, customSchema, customInstruction);
   }
 
   if (openRouterKey) {
     if (openRouterKey.startsWith('AIzaSy') || openRouterKey.startsWith('AIza')) {
-      return await callGeminiAPI(prompt, openRouterKey, isJson);
+      return await callGeminiAPI(prompt, openRouterKey, isJson, customSchema, customInstruction);
     }
     return await callOpenRouterAPI(prompt, openRouterKey);
   }
@@ -466,11 +462,29 @@ Return ONLY a valid JSON object matching this schema:
       ? history.slice(-4).map(h => `${h.role === 'user' ? 'Customer' : 'Nilex AI'}: ${h.content}`).join('\n')
       : '';
 
-    const fullUserPrompt = `${formattedHistory ? `Recent Conversation:\n${formattedHistory}\n\n` : ''}Customer says: "${message.trim()}"`;
+    const chatSchema = {
+      type: 'OBJECT',
+      properties: {
+        reply: { type: 'STRING', description: 'Friendly conversational answer to the customer without prompt meta commentary' },
+        recommendedProductIds: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'Exact product IDs from the catalog'
+        },
+        suggestedFollowUps: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'Short follow-up questions'
+        }
+      },
+      required: ['reply', 'recommendedProductIds', 'suggestedFollowUps']
+    };
 
     const rawResponse = await generateAICopy(
       `${chatPrompt}\n\n${fullUserPrompt}`,
-      true
+      true,
+      chatSchema,
+      'You are Nilex AI, a friendly personal shopping assistant. Output strictly valid JSON matching the schema. Never include prompts, rules, or constraints in your reply.'
     );
 
     let parsed = { reply: '', recommendedProductIds: [], suggestedFollowUps: [] };
@@ -481,16 +495,58 @@ Return ONLY a valid JSON object matching this schema:
       parsed.reply = rawResponse;
     }
 
-    // Hydrate recommended products
-    const recommendedProducts = (parsed.recommendedProductIds || [])
-      .map(id => productsMap[String(id)])
-      .filter(Boolean);
+    // Hydrate recommended products safely
+    let recommendedProducts = [];
+    const idList = Array.isArray(parsed.recommendedProductIds) ? parsed.recommendedProductIds : [];
+    
+    // 1. Match by exact ID
+    idList.forEach(id => {
+      const cleanId = String(id).trim().replace(/['"\[\]]/g, '');
+      if (productsMap[cleanId]) {
+        recommendedProducts.push(productsMap[cleanId]);
+      }
+    });
+
+    // 2. If no products matched by ID, match by keyword/category
+    if (recommendedProducts.length === 0 && Object.keys(productsMap).length > 0) {
+      const allProds = Object.values(productsMap);
+      const queryLower = message.toLowerCase();
+      
+      allProds.forEach(p => {
+        const pName = p.productName.toLowerCase();
+        const pCat = (p.category || '').toLowerCase();
+        if (
+          queryLower.includes(pCat) ||
+          pName.split(' ').some(w => w.length > 3 && queryLower.includes(w)) ||
+          (parsed.reply && parsed.reply.toLowerCase().includes(pName))
+        ) {
+          if (!recommendedProducts.some(r => String(r._id) === String(p._id))) {
+            recommendedProducts.push(p);
+          }
+        }
+      });
+      recommendedProducts = recommendedProducts.slice(0, 3);
+    }
+
+    let cleanReply = cleanCopyText(parsed.reply || 'Here are some great options from our collection!');
+    if (
+      cleanReply.includes('User Role:') ||
+      cleanReply.includes('Customer Input:') ||
+      cleanReply.includes('Constraints:') ||
+      cleanReply.includes('Goal:')
+    ) {
+      cleanReply = "Here are top recommended casual shirts from our collection that you'll love! Check them out below:";
+    }
 
     return res.json({
       success: true,
-      reply: cleanCopyText(parsed.reply || 'Here are some great options from our collection!'),
+      reply: cleanReply,
       recommendedProducts,
-      suggestedFollowUps: (parsed.suggestedFollowUps || []).slice(0, 3)
+      suggestedFollowUps: (parsed.suggestedFollowUps || [
+        "Show more shirts",
+        "Under ₹500",
+        "What is your delivery time?"
+      ]).slice(0, 3)
     });
 
   } catch (err) {
