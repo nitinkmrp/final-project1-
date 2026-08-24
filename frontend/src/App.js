@@ -4,6 +4,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import NavBar from "./components/Navbar/Navbar";
 import Footer from "./components/Footer/Footer";
 import Loader from "./components/Loader/Loader";
+import AIChatbot from "./components/AIChatbot/AIChatbot";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import AdminGuard from "./components/AdminGuard";
@@ -79,6 +80,7 @@ function App() {
           <Route path="/terms-and-conditions"   element={<TermsCondition />} />
         </Routes>
         <Footer />
+        <AIChatbot />
       </Router>
     </Suspense>
   );

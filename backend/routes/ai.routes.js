@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import roleGuard from '../middleware/roleGuard.js';
 
 const router = express.Router();
@@ -321,6 +322,111 @@ Return ONLY the prompt text. No quotes, no word count notes.`;
       return res.status(503).json({
         success: false,
         message: 'Gemini API key is not configured. Please add GEMINI_API_KEY to your backend .env file.'
+      });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/ai/chat
+// Customer shopping assistant & stylist chatbot
+// Body: { message, history }
+router.post('/chat', async (req, res) => {
+  const { message, history = [] } = req.body;
+
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ success: false, message: 'Message is required' });
+  }
+
+  try {
+    // 1. Fetch available in-stock products from DB for catalog grounding
+    let catalogContext = '';
+    const productsMap = {};
+    try {
+      const Product = mongoose.models.Product;
+      if (Product) {
+        const products = await Product.find({ stock: { $gt: 0 } })
+          .select('_id productName category price discount imgUrl shortDesc sizes avgRating')
+          .limit(30)
+          .lean();
+
+        if (products && products.length > 0) {
+          catalogContext = products.map(p => 
+            `[ID: ${p._id}] Name: ${p.productName} | Category: ${p.category} | Price: ₹${p.price} | Discount: ${p.discount || 0}% | Sizes: ${(p.sizes || []).join(', ')} | Summary: ${p.shortDesc || ''}`
+          ).join('\n');
+
+          products.forEach(p => {
+            productsMap[String(p._id)] = p;
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[AI Chat] Could not load product catalog from DB:', e.message);
+    }
+
+    // 2. Build conversational system prompt
+    const chatPrompt = `You are "Nilex AI", the friendly, stylish, voice-enabled personal shopping assistant for NilexCart (an Indian fashion & lifestyle e-commerce store).
+
+CURRENT STORE IN-STOCK CATALOG:
+${catalogContext || 'Catalog loading.'}
+
+STORE POLICIES & INFO:
+- Free delivery across India on orders over ₹499. Standard delivery time is 3 to 5 business days.
+- 7-day hassle-free return and exchange policy.
+- Secure payments via Razorpay, UPI (GPay, PhonePe, Paytm), Cards, Net Banking, and Cash on Delivery (COD).
+
+RULES FOR YOUR RESPONSE:
+1. Be warm, enthusiastic, helpful, and concise (natural for voice reading aloud).
+2. When the customer is looking for products, gifts, or styling ideas:
+   - Recommend matching products strictly from the catalog list above.
+   - List their exact IDs in the "recommendedProductIds" array (up to 3 items).
+3. If the customer asks about shipping, returns, payment, or orders, explain politely and clearly.
+4. Keep the text clean without markdown headers, bullet clutter, or emojis overload.
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "reply": "Your friendly, voice-friendly conversational answer here",
+  "recommendedProductIds": ["id1", "id2"],
+  "suggestedFollowUps": ["Question 1", "Question 2", "Question 3"]
+}`;
+
+    // Combine recent conversation history (last 4 turns)
+    const formattedHistory = Array.isArray(history)
+      ? history.slice(-4).map(h => `${h.role === 'user' ? 'Customer' : 'Nilex AI'}: ${h.content}`).join('\n')
+      : '';
+
+    const fullUserPrompt = `${formattedHistory ? `Recent Conversation:\n${formattedHistory}\n\n` : ''}Customer says: "${message.trim()}"`;
+
+    const rawResponse = await generateAICopy(
+      `${chatPrompt}\n\n${fullUserPrompt}`,
+      true
+    );
+
+    let parsed = { reply: '', recommendedProductIds: [], suggestedFollowUps: [] };
+    try {
+      const clean = rawResponse.replace(/```json|```/gi, '').trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      parsed.reply = rawResponse;
+    }
+
+    // Hydrate recommended products
+    const recommendedProducts = (parsed.recommendedProductIds || [])
+      .map(id => productsMap[String(id)])
+      .filter(Boolean);
+
+    return res.json({
+      success: true,
+      reply: cleanCopyText(parsed.reply || 'Here are some great options from our collection!'),
+      recommendedProducts,
+      suggestedFollowUps: (parsed.suggestedFollowUps || []).slice(0, 3)
+    });
+
+  } catch (err) {
+    if (err.message === 'MISSING_API_KEY') {
+      return res.status(503).json({
+        success: false,
+        message: 'AI Shopping Assistant is currently offline. Please configure GEMINI_API_KEY on the backend.'
       });
     }
     return res.status(500).json({ success: false, message: err.message });
