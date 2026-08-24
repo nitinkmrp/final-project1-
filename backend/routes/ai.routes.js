@@ -462,6 +462,8 @@ Return ONLY a valid JSON object matching this schema:
       ? history.slice(-4).map(h => `${h.role === 'user' ? 'Customer' : 'Nilex AI'}: ${h.content}`).join('\n')
       : '';
 
+    const fullUserPrompt = `${formattedHistory ? `Recent Conversation:\n${formattedHistory}\n\n` : ''}Customer says: "${message.trim()}"`;
+
     const chatSchema = {
       type: 'OBJECT',
       properties: {
