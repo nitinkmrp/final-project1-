@@ -37,6 +37,11 @@ const AdminProducts = () => {
   const [aiLoading, setAiLoading]       = useState(false); // Gemini AI
   const [aiImgLoading, setAiImgLoading] = useState(false); // Gemini + Adobe AI
   const [aiTone, setAiTone]             = useState("engaging"); // engaging | luxury | catchy | technical
+  const [showAiStudioModal, setShowAiStudioModal]     = useState(false);
+  const [aiStudioShort, setAiStudioShort]             = useState("");
+  const [aiStudioFull, setAiStudioFull]               = useState("");
+  const [aiStudioInstruction, setAiStudioInstruction] = useState("");
+  const [aiStudioRefining, setAiStudioRefining]       = useState(false);
   const [ccEverywhere, setCcEverywhere] = useState(null);
   const fileInputRef = useRef();
 
@@ -151,6 +156,99 @@ const AdminProducts = () => {
     } finally {
       setAiLoading(false);
     }
+  };
+
+  // ── Interactive AI Studio Handlers ──────────────────
+  const openAiStudio = async () => {
+    if (!form.productName.trim()) {
+      toast.error("Please enter a product name first");
+      return;
+    }
+    setAiStudioShort(form.shortDesc || "");
+    setAiStudioFull(form.description || "");
+    setAiStudioInstruction("");
+    setShowAiStudioModal(true);
+
+    // If both fields are currently empty, auto-generate the initial draft
+    if (!form.shortDesc?.trim() && !form.description?.trim()) {
+      setAiStudioRefining(true);
+      try {
+        const res = await fetch(`${BASE_URL}/api/ai/describe`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${localStorage.getItem("jwtToken")}`,
+          },
+          body: JSON.stringify({
+            productName: form.productName,
+            category: form.category,
+            price: form.price,
+            target: "both",
+            tone: aiTone,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setAiStudioShort(data.short || "");
+          setAiStudioFull(data.full || "");
+        }
+      } catch (err) {
+        console.error("AI Studio auto-init failed:", err);
+      } finally {
+        setAiStudioRefining(false);
+      }
+    }
+  };
+
+  const refineAiCopy = async (customInstruction) => {
+    const instruction = (customInstruction || aiStudioInstruction).trim();
+    if (!instruction) {
+      toast.info("Please enter a refinement instruction or pick a chip below");
+      return;
+    }
+
+    setAiStudioRefining(true);
+    try {
+      const res = await fetch(`${BASE_URL}/api/ai/refine`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("jwtToken")}`,
+        },
+        body: JSON.stringify({
+          productName: form.productName,
+          category: form.category,
+          price: form.price,
+          currentShort: aiStudioShort,
+          currentFull: aiStudioFull,
+          instructions: instruction,
+          tone: aiTone,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiStudioShort(data.short || aiStudioShort);
+        setAiStudioFull(data.full || aiStudioFull);
+        setAiStudioInstruction("");
+        toast.success("✨ Copy refined with your feedback!");
+      } else {
+        toast.error(`Refinement error: ${data.message}`);
+      }
+    } catch (err) {
+      toast.error(`Refinement error: ${err.message}`);
+    } finally {
+      setAiStudioRefining(false);
+    }
+  };
+
+  const applyAiStudioToForm = () => {
+    setForm((prev) => ({
+      ...prev,
+      shortDesc: aiStudioShort,
+      description: aiStudioFull,
+    }));
+    setShowAiStudioModal(false);
+    toast.success("✨ Inserted AI copy into product form!");
   };
 
   const generateImage = async () => {
@@ -761,8 +859,17 @@ const AdminProducts = () => {
                     {aiLoading ? (
                       <><span className="ai-spinner" /> Generating…</>
                     ) : (
-                      <>✨ Write Both</>
+                      <>✨ Quick Fill</>
                     )}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="ai-studio-btn"
+                    onClick={openAiStudio}
+                    title="Open Interactive AI Copywriting Studio"
+                  >
+                    ✨ AI Studio
                   </button>
                 </div>
               </div>
@@ -815,6 +922,150 @@ const AdminProducts = () => {
                 {saving ? "Saving…" : editTarget ? "Update Product" : "Create Product"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Interactive AI Copywriting Studio Modal ── */}
+      {showAiStudioModal && (
+        <div className="ap-modal-backdrop ai-studio-backdrop" onClick={() => setShowAiStudioModal(false)}>
+          <div className="ap-modal ai-studio-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ai-studio-header">
+              <div className="d-flex align-items-center gap-2">
+                <span className="ai-studio-icon">✨</span>
+                <div>
+                  <h5 className="ai-studio-title mb-0">Gemini AI Copywriting Studio</h5>
+                  <span className="ai-studio-sub">
+                    {form.productName} {form.category ? `• ${form.category}` : ""} {form.price ? `• ₹${form.price}` : ""}
+                  </span>
+                </div>
+              </div>
+              <button className="ap-modal-close" onClick={() => setShowAiStudioModal(false)}>✕</button>
+            </div>
+
+            {/* Draft Workspace */}
+            <div className="ai-studio-body">
+              {aiStudioRefining ? (
+                <div className="ai-studio-loader">
+                  <div className="ai-studio-spinner" />
+                  <p className="mb-0">Gemini AI is crafting copy based on your instructions…</p>
+                </div>
+              ) : (
+                <>
+                  {/* Short Tagline */}
+                  <div className="ai-studio-field-group">
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                      <label className="ai-studio-label">
+                        Catchy Tagline / Short Description
+                        {aiStudioShort?.trim() && (
+                          <span className="ai-studio-word-count">
+                            ({aiStudioShort.trim().split(/\s+/).filter(Boolean).length} words)
+                          </span>
+                        )}
+                      </label>
+                    </div>
+                    <input
+                      className="ap-input ai-studio-input"
+                      value={aiStudioShort}
+                      onChange={(e) => setAiStudioShort(e.target.value)}
+                      placeholder="Short catchy tagline…"
+                    />
+                  </div>
+
+                  {/* Full Description */}
+                  <div className="ai-studio-field-group">
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                      <label className="ai-studio-label">
+                        Full Product Description
+                        {aiStudioFull?.trim() && (
+                          <span className="ai-studio-word-count">
+                            ({aiStudioFull.trim().split(/\s+/).filter(Boolean).length} words)
+                          </span>
+                        )}
+                      </label>
+                    </div>
+                    <textarea
+                      className="ap-input ap-textarea ai-studio-textarea"
+                      rows={4}
+                      value={aiStudioFull}
+                      onChange={(e) => setAiStudioFull(e.target.value)}
+                      placeholder="Full detailed product description…"
+                    />
+                  </div>
+
+                  {/* Interactive Refinement / Feedback Prompt Bar */}
+                  <div className="ai-refine-box">
+                    <label className="ai-refine-label">
+                      💬 Give Feedback or Custom Instructions to Gemini:
+                    </label>
+                    <form
+                      className="d-flex gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        refineAiCopy();
+                      }}
+                    >
+                      <input
+                        type="text"
+                        className="ap-input flex-grow-1 ai-refine-input"
+                        value={aiStudioInstruction}
+                        onChange={(e) => setAiStudioInstruction(e.target.value)}
+                        placeholder="e.g. Highlight 100% organic cotton, make it luxury, add 2-year warranty…"
+                        disabled={aiStudioRefining}
+                      />
+                      <button
+                        type="submit"
+                        className="ai-refine-submit-btn"
+                        disabled={!aiStudioInstruction.trim() || aiStudioRefining}
+                      >
+                        🚀 Refine
+                      </button>
+                    </form>
+
+                    {/* Quick Refinement Prompt Pills */}
+                    <div className="ai-refine-chips">
+                      {[
+                        "⚡ Make it punchier",
+                        "💎 Ultra Luxury & High-End",
+                        "🌿 Highlight Material & Comfort",
+                        "🔥 Limited Edition / Urgent",
+                        "✨ Add Feature Bullet Points",
+                        "🔄 Fresh Rewrite",
+                      ].map((chip, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="ai-refine-chip"
+                          onClick={() => refineAiCopy(chip)}
+                          disabled={aiStudioRefining}
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="ai-studio-footer">
+              <button
+                type="button"
+                className="ap-cancel-btn"
+                onClick={() => setShowAiStudioModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="ai-insert-btn"
+                onClick={applyAiStudioToForm}
+                disabled={!aiStudioShort.trim() && !aiStudioFull.trim()}
+              >
+                📥 Insert into Product Form
+              </button>
+            </div>
           </div>
         </div>
       )}

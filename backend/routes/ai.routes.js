@@ -300,6 +300,77 @@ Output strictly valid JSON only.`;
   }
 });
 
+// POST /api/ai/refine
+// Interactive copy refinement with custom user prompt/feedback
+// Body: { productName, category, price, currentShort, currentFull, instructions, tone }
+router.post('/refine', roleGuard(['admin', 'editor']), async (req, res) => {
+  const {
+    productName,
+    category,
+    price,
+    currentShort = '',
+    currentFull = '',
+    instructions = '',
+    tone = 'engaging'
+  } = req.body;
+
+  if (!productName?.trim()) {
+    return res.status(400).json({ success: false, message: 'productName is required' });
+  }
+
+  const productInfo = [
+    `Product: ${productName.trim()}`,
+    category ? `Category: ${category.trim()}` : '',
+    price    ? `Price: ₹${price}`             : '',
+  ].filter(Boolean).join(', ');
+
+  const prompt = `You are an expert e-commerce copywriter interactively refining product marketing copy.
+
+PRODUCT CONTEXT:
+${productInfo}
+
+CURRENT DRAFT:
+- Short Tagline: "${currentShort}"
+- Full Description: "${currentFull}"
+
+USER REFINEMENT INSTRUCTIONS / FEEDBACK:
+"${instructions.trim() || 'Improve the copy to make it more persuasive, engaging, and conversion-focused.'}"
+
+TASK:
+Refine and rewrite the copy incorporating the user's specific instructions.
+Return a valid JSON object matching this schema:
+{
+  "short": "Refined punchy one-line tagline without quotes or word counts",
+  "full": "Refined engaging product description matching the user's instructions without meta commentary"
+}
+Output strictly valid JSON only.`;
+
+  try {
+    const rawText = await generateAICopy(prompt, true);
+    let parsed = { short: '', full: '' };
+    try {
+      const clean = rawText.replace(/```json|```/gi, '').trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      parsed = { short: currentShort, full: rawText };
+    }
+
+    return res.json({
+      success: true,
+      short: cleanCopyText(parsed.short || currentShort),
+      full: cleanCopyText(parsed.full || rawText)
+    });
+  } catch (err) {
+    if (err.message === 'MISSING_API_KEY') {
+      return res.status(503).json({
+        success: false,
+        message: 'Gemini API key is not configured. Please add GEMINI_API_KEY to your backend .env file.'
+      });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/ai/generate-prompt
 // Body: { productName, category }
 router.post('/generate-prompt', roleGuard(['admin', 'editor']), async (req, res) => {
