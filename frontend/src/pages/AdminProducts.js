@@ -724,13 +724,13 @@ const AdminProducts = () => {
               {/* AI Description Assistant */}
               <div className="ai-assistant-bar">
                 <div className="ai-badge">✨ AI Assistant</div>
-                <span className="ai-hint">Auto-write descriptions using OpenRouter AI</span>
+                <span className="ai-hint">Auto-write descriptions using Gemini AI</span>
                 <button
                   type="button"
                   className={`ai-gen-btn ${aiLoading ? "ai-gen-loading" : ""}`}
                   onClick={() => generateDescriptions("both")}
                   disabled={aiLoading}
-                  title="Generate both short and full description using OpenRouter AI"
+                  title="Generate both short and full description using Gemini AI"
                 >
                   {aiLoading ? (
                     <><span className="ai-spinner" /> Generating…</>
