@@ -34,8 +34,9 @@ const AdminProducts = () => {
   const [imagePreview, setImagePreview] = useState(null);
   const [saving, setSaving]             = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [aiLoading, setAiLoading]       = useState(false); // OpenRouter AI
+  const [aiLoading, setAiLoading]       = useState(false); // Gemini AI
   const [aiImgLoading, setAiImgLoading] = useState(false); // Gemini + Adobe AI
+  const [aiTone, setAiTone]             = useState("engaging"); // engaging | luxury | catchy | technical
   const [ccEverywhere, setCcEverywhere] = useState(null);
   const fileInputRef = useRef();
 
@@ -101,8 +102,8 @@ const AdminProducts = () => {
   // Final list: prefer DB categories, fallback to whatever is on products
   const allCategoryNames = categoryNames.length > 0 ? categoryNames : productCats;
 
-  // ── OpenRouter AI Description Generator ─────────────────
-  const generateDescriptions = async (target = "both") => {
+  // ── Gemini AI Description Generator ─────────────────
+  const generateDescriptions = async (target = "both", tone = aiTone) => {
     if (!form.productName.trim()) {
       toast.error("Please enter a product name first");
       return;
@@ -120,6 +121,7 @@ const AdminProducts = () => {
           category:    form.category,
           price:       form.price,
           target,
+          tone,
         }),
       });
 
@@ -723,30 +725,62 @@ const AdminProducts = () => {
 
               {/* AI Description Assistant */}
               <div className="ai-assistant-bar">
-                <div className="ai-badge">✨ AI Assistant</div>
-                <span className="ai-hint">Auto-write descriptions using Gemini AI</span>
-                <button
-                  type="button"
-                  className={`ai-gen-btn ${aiLoading ? "ai-gen-loading" : ""}`}
-                  onClick={() => generateDescriptions("both")}
-                  disabled={aiLoading}
-                  title="Generate both short and full description using Gemini AI"
-                >
-                  {aiLoading ? (
-                    <><span className="ai-spinner" /> Generating…</>
-                  ) : (
-                    <>✨ Write Both</>
-                  )}
-                </button>
+                <div className="ai-badge">✨ Gemini AI</div>
+                <span className="ai-hint">Auto-write e-commerce descriptions</span>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                  <select 
+                    value={aiTone} 
+                    onChange={(e) => setAiTone(e.target.value)}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.15)',
+                      color: '#ffffff',
+                      border: '1px solid rgba(255, 255, 255, 0.25)',
+                      borderRadius: '8px',
+                      padding: '5px 10px',
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      outline: 'none',
+                      cursor: 'pointer'
+                    }}
+                    title="Select copywriting style tone"
+                  >
+                    <option value="engaging" style={{ color: '#1e293b' }}>✨ Tone: Engaging</option>
+                    <option value="luxury" style={{ color: '#1e293b' }}>💎 Tone: Luxury</option>
+                    <option value="catchy" style={{ color: '#1e293b' }}>🔥 Tone: Catchy</option>
+                    <option value="technical" style={{ color: '#1e293b' }}>⚙️ Tone: Technical</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    className={`ai-gen-btn ${aiLoading ? "ai-gen-loading" : ""}`}
+                    onClick={() => generateDescriptions("both", aiTone)}
+                    disabled={aiLoading}
+                    title="Generate both short tagline and full description using Gemini AI"
+                  >
+                    {aiLoading ? (
+                      <><span className="ai-spinner" /> Generating…</>
+                    ) : (
+                      <>✨ Write Both</>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="ap-form-group">
                 <div className="ai-label-row">
-                  <label>Short Description</label>
+                  <label>
+                    Short Description
+                    {form.shortDesc?.trim() && (
+                      <span className="ap-hint" style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa' }}>
+                        ({form.shortDesc.trim().split(/\s+/).filter(Boolean).length} words)
+                      </span>
+                    )}
+                  </label>
                   <button type="button" className="ai-mini-btn"
-                    onClick={() => generateDescriptions("short")}
+                    onClick={() => generateDescriptions("short", aiTone)}
                     disabled={aiLoading}
-                    title="Generate short description only">
+                    title="Generate short tagline only">
                     ✨ AI
                   </button>
                 </div>
@@ -757,9 +791,16 @@ const AdminProducts = () => {
 
               <div className="ap-form-group">
                 <div className="ai-label-row">
-                  <label>Full Description</label>
+                  <label>
+                    Full Description
+                    {form.description?.trim() && (
+                      <span className="ap-hint" style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa' }}>
+                        ({form.description.trim().split(/\s+/).filter(Boolean).length} words)
+                      </span>
+                    )}
+                  </label>
                   <button type="button" className="ai-mini-btn"
-                    onClick={() => generateDescriptions("full")}
+                    onClick={() => generateDescriptions("full", aiTone)}
                     disabled={aiLoading}
                     title="Generate full description only">
                     ✨ AI

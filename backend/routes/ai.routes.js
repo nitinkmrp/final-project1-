@@ -3,6 +3,24 @@ import roleGuard from '../middleware/roleGuard.js';
 
 const router = express.Router();
 
+// Post-processing text sanitizer to strip word counts, meta notes, and conversational filler
+const cleanCopyText = (text) => {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    // Remove (Word count: XX), (XX words), Word count: XX, Words: XX, etc.
+    .replace(/\(?\b(word\s*count|words?)\s*[:=-]?\s*\d+\s*(words?)?\)?/gi, '')
+    // Remove trailing/bracketed notes like [75 words], (approx 80 words)
+    .replace(/\[\s*\d+\s*words?\s*\]/gi, '')
+    .replace(/\(\s*\d+\s*words?\s*\)/gi, '')
+    .replace(/\(\s*approx(imately)?\s*\d+\s*words?\s*\)/gi, '')
+    // Remove AI conversational prefixes
+    .replace(/^(here\s+(is|are)\s+(a|the)?\s*(product|tagline|description|copy)?[:=-]?\s*)/gi, '')
+    .replace(/^(short\s*description|tagline|full\s*description|description|summary)\s*[:=-]\s*/gi, '')
+    // Remove wrapping quotes and excessive whitespace
+    .replace(/^["'`“”]+|["'`“”]+$/g, '')
+    .trim();
+};
+
 // Helper to call Google Gemini API directly with dynamic model discovery & fallback
 const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
   const candidateModels = [
@@ -16,9 +34,28 @@ const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
     'gemini-pro'
   ];
 
+  const systemInstructionText = 'You are an expert e-commerce copywriter. Write highly engaging, conversion-optimized copy. NEVER include word counts, character counts, commentary, headers, or explanations in parentheses. Return ONLY direct customer-facing copy.';
+
   const tryGenerate = async (modelName, useJson) => {
     const cleanModel = modelName.replace(/^models\//, '');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+
+    const generationConfig = {
+      temperature: 0.6,
+      maxOutputTokens: 400,
+    };
+
+    if (useJson) {
+      generationConfig.responseMimeType = 'application/json';
+      generationConfig.responseSchema = {
+        type: 'OBJECT',
+        properties: {
+          short: { type: 'STRING', description: 'Punchy one-line tagline' },
+          full: { type: 'STRING', description: 'Engaging product description' }
+        },
+        required: ['short', 'full']
+      };
+    }
 
     const payload = {
       contents: [
@@ -26,10 +63,10 @@ const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
           parts: [{ text: prompt }]
         }
       ],
-      generationConfig: {
-        temperature: 0.7,
-        ...(useJson ? { responseMimeType: 'application/json' } : {})
-      }
+      systemInstruction: {
+        parts: [{ text: systemInstructionText }]
+      },
+      generationConfig
     };
 
     const res = await fetch(url, {
@@ -58,7 +95,7 @@ const callGeminiAPI = async (prompt, apiKey, isJson = false) => {
         throw new Error(errMsg || 'Google Gemini API key permission denied or quota exhausted.');
       }
 
-      // If JSON mode caused error, retry this model with plain text
+      // If schema/JSON mode caused an error on older models, retry without schema
       if (isJson) {
         const retryResult = await tryGenerate(model, false);
         if (retryResult.ok) {
@@ -123,8 +160,15 @@ const callOpenRouterAPI = async (prompt, apiKey) => {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.7
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert e-commerce copywriter. Write clean, conversion-focused copy. Never output word counts, notes, or meta commentary.'
+            },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.6,
+          max_tokens: 350
         })
       });
 
@@ -149,15 +193,12 @@ const generateAICopy = async (prompt, isJson = false) => {
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   const openRouterKey = process.env.OPENROUTER_API_KEY || '';
 
-  // 1. If key starts with AIzaSy (standard Google API key format) or GEMINI_API_KEY is provided
   if (geminiKey) {
     return await callGeminiAPI(prompt, geminiKey, isJson);
   }
 
-  // 2. If OPENROUTER_API_KEY is provided: check if it's accidentally a Google key or actual OpenRouter key
   if (openRouterKey) {
     if (openRouterKey.startsWith('AIzaSy') || openRouterKey.startsWith('AIza')) {
-      // User entered Google Gemini key into OPENROUTER_API_KEY variable
       return await callGeminiAPI(prompt, openRouterKey, isJson);
     }
     return await callOpenRouterAPI(prompt, openRouterKey);
@@ -167,10 +208,11 @@ const generateAICopy = async (prompt, isJson = false) => {
 };
 
 // POST /api/ai/describe
-// Body: { productName, category, price, target }
+// Body: { productName, category, price, target, tone }
 // target: "both" | "short" | "full"
+// tone: "engaging" | "luxury" | "catchy" | "technical"
 router.post('/describe', roleGuard(['admin', 'editor']), async (req, res) => {
-  const { productName, category, price, target = 'both' } = req.body;
+  const { productName, category, price, target = 'both', tone = 'engaging' } = req.body;
 
   if (!productName?.trim()) {
     return res.status(400).json({ success: false, message: 'productName is required' });
@@ -182,17 +224,40 @@ router.post('/describe', roleGuard(['admin', 'editor']), async (req, res) => {
     price    ? `Price: ₹${price}`             : '',
   ].filter(Boolean).join(', ');
 
+  const toneInstructions = {
+    luxury: 'Tone: Elegant, sophisticated, and premium luxury voice emphasizing craftsmanship.',
+    catchy: 'Tone: Energetic, trendy, bold, and high-energy marketing style.',
+    technical: 'Tone: Informative, highlighting build quality, specs, utility, and reliability.',
+    engaging: 'Tone: Warm, persuasive, customer-centric, and benefit-focused.'
+  };
+
+  const selectedTone = toneInstructions[tone] || toneInstructions.engaging;
+
   const isJson = target === 'both';
   const prompt =
     target === 'short'
-      ? `Write a concise, punchy one-line marketing tagline (maximum 15 words) for: ${productInfo}. Return only the tagline without surrounding quotes.`
+      ? `Write one punchy, catchy marketing tagline for an e-commerce store selling: ${productInfo}.
+${selectedTone}
+Rules:
+- Keep it to 1 strong sentence.
+- Do NOT include quotes, word counts, or character numbers.
+- Return ONLY the clean tagline text.`
       : target === 'full'
-      ? `Write a compelling full product description (3–4 sentences, ~80 words) for an e-commerce website for: ${productInfo}. Include key features, benefits, and an engaging call to action. Return only the description text.`
-      : `Generate product marketing copy for an e-commerce website for: ${productInfo}.
-Return a JSON object with exactly two keys:
-- "short": A catchy one-line marketing tagline (maximum 15 words)
-- "full": A compelling product description in 3–4 sentences (~80 words) highlighting features, materials, and benefits.
-Return ONLY valid JSON matching this structure: {"short": "...", "full": "..."}`;
+      ? `Write a compelling e-commerce product description for: ${productInfo}.
+${selectedTone}
+Rules:
+- 3 to 4 engaging sentences highlighting quality, benefits, and everyday appeal.
+- Include a persuasive call to action.
+- Do NOT include headers, bullet points, word counts, or meta notes.
+- Return ONLY the final description text.`
+      : `Generate e-commerce product copy for: ${productInfo}.
+${selectedTone}
+Return a JSON object with two fields:
+{
+  "short": "A punchy, catchy one-line tagline without quotes or word counts",
+  "full": "A 3-4 sentence engaging product description highlighting benefits and a call to action without meta commentary"
+}
+Output strictly valid JSON only.`;
 
   try {
     const rawText = await generateAICopy(prompt, isJson);
@@ -203,25 +268,25 @@ Return ONLY valid JSON matching this structure: {"short": "...", "full": "..."}`
         const parsed = JSON.parse(clean);
         return res.json({
           success: true,
-          short: parsed.short || '',
-          full: parsed.full || rawText
+          short: cleanCopyText(parsed.short || ''),
+          full: cleanCopyText(parsed.full || rawText)
         });
       } catch {
         // Fallback if parsing fails
+        const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
         return res.json({
           success: true,
-          short: rawText.split('\n')[0] || '',
-          full: rawText
+          short: cleanCopyText(lines[0] || ''),
+          full: cleanCopyText(rawText)
         });
       }
     }
 
     if (target === 'short') {
-      const clean = rawText.replace(/^["']|["']$/g, '').trim();
-      return res.json({ success: true, short: clean, full: '' });
+      return res.json({ success: true, short: cleanCopyText(rawText), full: '' });
     }
 
-    return res.json({ success: true, short: '', full: rawText });
+    return res.json({ success: true, short: '', full: cleanCopyText(rawText) });
 
   } catch (err) {
     if (err.message === 'MISSING_API_KEY') {
@@ -244,14 +309,13 @@ router.post('/generate-prompt', roleGuard(['admin', 'editor']), async (req, res)
   }
 
   const productInfo = `${productName} ${category ? `(Category: ${category})` : ''}`;
-  const promptText = `Create a highly detailed, descriptive photography prompt for AI image generation of an e-commerce product: ${productInfo}. 
-The image should be a professional commercial product studio shot, clean white or luxury aesthetic background, 4k resolution, hyper-realistic, studio lighting. 
-Return ONLY the prompt text, no quotes or markdown. Maximum 50 words.`;
+  const promptText = `Create a commercial studio photography prompt for AI image generation of: ${productInfo}. 
+The image must depict high-end product photography on a clean luxury backdrop with crisp studio lighting and 4K clarity. 
+Return ONLY the prompt text. No quotes, no word count notes.`;
 
   try {
     const generatedPrompt = await generateAICopy(promptText, false);
-    const cleanPrompt = generatedPrompt.replace(/^["']|["']$/g, '').trim();
-    return res.json({ success: true, prompt: cleanPrompt });
+    return res.json({ success: true, prompt: cleanCopyText(generatedPrompt) });
   } catch (err) {
     if (err.message === 'MISSING_API_KEY') {
       return res.status(503).json({
