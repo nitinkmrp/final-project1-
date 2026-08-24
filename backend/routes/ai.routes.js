@@ -190,7 +190,7 @@ const callOpenRouterAPI = async (prompt, apiKey) => {
 };
 
 // Unified dispatcher: determines whether to call Google Gemini or OpenRouter
-const generateAICopy = async (prompt, isJson = false) => {
+export const generateAICopy = async (prompt, isJson = false) => {
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   const openRouterKey = process.env.OPENROUTER_API_KEY || '';
 

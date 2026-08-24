@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import { upload, cloudinary } from '../config/cloudinary.js';
 import roleGuard from '../middleware/roleGuard.js';
+import { generateAICopy } from './ai.routes.js';
 
 const router = express.Router();
 
@@ -200,6 +201,179 @@ router.get('/inventory/insights', roleGuard(['admin', 'editor']), async (req, re
       suggestions,
     });
   } catch (err) { next(err); }
+});
+
+// ── POST /api/products/inventory/ai-audit — Gemini AI Inventory Doctor & Auditor ──
+router.post('/inventory/ai-audit', roleGuard(['admin', 'editor']), async (req, res, next) => {
+  try {
+    const products = await Product.find().lean();
+    let bills = [];
+    try {
+      const BillModel = mongoose.models.Bill || mongoose.model('Bill');
+      bills = await BillModel.find({ txnType: 'receive', status: 'paid' }).lean();
+    } catch (e) {
+      console.warn("Bill model query warning:", e.message);
+    }
+
+    // 1. Calculate stats
+    let totalValuation = 0;
+    let totalItems = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    const categoryStats = {};
+
+    products.forEach(p => {
+      const stock = p.stock || 0;
+      const price = p.price || 0;
+      const val = stock * price;
+      totalValuation += val;
+      totalItems += stock;
+      if (stock === 0) outOfStockCount++;
+      else if (stock <= 5) lowStockCount++;
+
+      const cat = p.category || 'General';
+      if (!categoryStats[cat]) categoryStats[cat] = { stock: 0, val: 0, items: 0 };
+      categoryStats[cat].stock += stock;
+      categoryStats[cat].val += val;
+      categoryStats[cat].items += 1;
+    });
+
+    // 2. 30-day sales velocity
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const salesMap = {};
+    bills.forEach(b => {
+      if (new Date(b.txnDate) >= thirtyDaysAgo && Array.isArray(b.items)) {
+        b.items.forEach(it => {
+          const id = it._id || it.id || it.productName;
+          if (id) {
+            const q = Number(it.qty || it.quantity || 1);
+            salesMap[id] = (salesMap[id] || 0) + q;
+          }
+        });
+      }
+    });
+
+    // Prepare summary snapshot
+    const productSummaryList = products.map(p => {
+      const sales = salesMap[p._id.toString()] || salesMap[p.productName] || 0;
+      return `[ID: ${p._id}] "${p.productName}" | Cat: ${p.category} | Stock: ${p.stock} | Price: ₹${p.price} | 30d Sales: ${sales} units | Valuation: ₹${(p.stock || 0) * (p.price || 0)}`;
+    }).join('\n');
+
+    const auditPrompt = `You are the Chief AI Inventory Officer and Financial Auditor for NilexCart (an Indian fashion & lifestyle e-commerce store).
+
+INVENTORY METRICS SUMMARY:
+- Total Products Count: ${products.length}
+- Total Stock Units: ${totalItems}
+- Total Inventory Valuation: ₹${totalValuation.toLocaleString()}
+- Out of Stock Items: ${outOfStockCount}
+- Low Stock Items (<= 5 units): ${lowStockCount}
+
+PRODUCT INVENTORY SNAPSHOT:
+${productSummaryList.slice(0, 4000)}
+
+Perform a deep financial & inventory health audit. Return a strictly valid JSON object matching this schema:
+{
+  "healthScore": 85,
+  "healthStatus": "Good",
+  "executiveSummary": "2-3 concise sentences summarizing stock health, capital efficiency, and key action points.",
+  "lockedCapitalInDeadStock": 12000,
+  "restockAlerts": [
+    {
+      "productId": "valid ID from list",
+      "productName": "Exact product name",
+      "currentStock": 2,
+      "suggestedRestockQty": 15,
+      "urgency": "high",
+      "estimatedCost": 12000,
+      "reasoning": "Selling fast, projected stockout within 3 days."
+    }
+  ],
+  "deadStockAlerts": [
+    {
+      "productId": "valid ID from list",
+      "productName": "Exact product name",
+      "currentStock": 12,
+      "lockedCapital": 9600,
+      "suggestedDiscount": 20,
+      "actionPlan": "Apply a 20% clearance discount or bundle deal to unlock idle capital."
+    }
+  ],
+  "seasonalTips": [
+    {
+      "category": "Category Name",
+      "trendAdvice": "Seasonal demand trend insight for Indian market",
+      "recommendation": "Actionable stocking recommendation"
+    }
+  ]
+}`;
+
+    const rawAudit = await generateAICopy(auditPrompt, true);
+    let parsedAudit = null;
+    try {
+      const clean = rawAudit.replace(/```json|```/gi, '').trim();
+      parsedAudit = JSON.parse(clean);
+    } catch {
+      parsedAudit = {
+        healthScore: outOfStockCount > 5 ? 65 : 85,
+        healthStatus: outOfStockCount > 5 ? 'Needs Attention' : 'Good',
+        executiveSummary: rawAudit,
+        lockedCapitalInDeadStock: 0,
+        restockAlerts: [],
+        deadStockAlerts: [],
+        seasonalTips: []
+      };
+    }
+
+    return res.json({
+      success: true,
+      data: parsedAudit,
+      stats: {
+        totalValuation,
+        totalItems,
+        lowStockCount,
+        outOfStockCount,
+        categoryStats
+      }
+    });
+
+  } catch (err) {
+    if (err.message === 'MISSING_API_KEY') {
+      return res.status(503).json({
+        success: false,
+        message: 'Gemini API key is not configured. Please set GEMINI_API_KEY on the backend.'
+      });
+    }
+    next(err);
+  }
+});
+
+// ── POST /api/products/inventory/ai-ask — Natural Language & Voice Warehouse Assistant ──
+router.post('/inventory/ai-ask', roleGuard(['admin', 'editor']), async (req, res, next) => {
+  const { question } = req.body;
+  if (!question || !question.trim()) {
+    return res.status(400).json({ success: false, message: 'Question is required' });
+  }
+
+  try {
+    const products = await Product.find().lean();
+    const productSummary = products.map(p => 
+      `"${p.productName}" | Cat: ${p.category} | Stock: ${p.stock} | Price: ₹${p.price} | Value: ₹${(p.stock || 0) * (p.price || 0)}`
+    ).join('\n');
+
+    const prompt = `You are NilexCart's AI Warehouse Operations Assistant.
+Current Warehouse Inventory Snapshot:
+${productSummary.slice(0, 4000)}
+
+Admin asks: "${question.trim()}"
+
+Provide a concise, direct, professional answer with calculations or product names where appropriate. Maximum 3-4 sentences.`;
+
+    const answer = await generateAICopy(prompt, false);
+    return res.json({ success: true, answer: answer.trim() });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ── GET /api/products — list all products ───────────

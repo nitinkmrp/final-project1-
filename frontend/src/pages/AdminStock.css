@@ -1121,3 +1121,178 @@
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   AI INVENTORY ADVISOR & PREDICTIVE INTELLIGENCE STYLES
+════════════════════════════════════════════════════════════════ */
+
+.ai-advisor-panel {
+  animation: asFadeIn 0.3s ease;
+}
+
+.ai-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  border-left: 4px solid #3b82f6;
+}
+
+.ai-header-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ai-brain-icon {
+  font-size: 32px;
+  width: 52px;
+  height: 52px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(233, 69, 96, 0.2));
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* 🎙️ Ask Stock AI Bar */
+.ai-ask-bar {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.8));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 16px;
+}
+
+.ai-ask-icon {
+  font-size: 20px;
+}
+
+.as-voice-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.as-voice-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(1.05);
+}
+
+.as-voice-btn.listening {
+  background: #ef4444;
+  border-color: #dc2626;
+  animation: asVoicePulse 1.2s infinite;
+}
+
+@keyframes asVoicePulse {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.ai-ask-chip {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ai-ask-chip:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+.ai-answer-box {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+/* Health Score Gauge */
+.health-score-badge {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+  flex-shrink: 0;
+}
+
+.health-score-num {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.health-score-denom {
+  font-size: 9px;
+  opacity: 0.85;
+}
+
+/* Border Highlighting */
+.border-left-high {
+  border-left: 4px solid #ef4444 !important;
+}
+
+.border-left-medium {
+  border-left: 4px solid #f59e0b !important;
+}
+
+.border-left-info {
+  border-left: 4px solid #3b82f6 !important;
+}
+
+.severity-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.severity-high {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.severity-medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.seasonal-tip-card {
+  transition: all 0.2s ease;
+}
+
+.seasonal-tip-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+

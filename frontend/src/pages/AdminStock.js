@@ -34,6 +34,14 @@ const AdminStock = () => {
   const [lowStockThreshold, setLowStockThreshold] = useState(5);
   const [applyingSuggestionId, setApplyingSuggestionId] = useState(null);
 
+  // AI Inventory Intelligence State
+  const [aiAuditData, setAiAuditData] = useState(null);
+  const [aiAuditLoading, setAiAuditLoading] = useState(false);
+  const [askInput, setAskInput] = useState("");
+  const [askLoading, setAskLoading] = useState(false);
+  const [askAnswer, setAskAnswer] = useState("");
+  const [isVoiceAsking, setIsVoiceAsking] = useState(false);
+
   useEffect(() => {
     if (!currentUser) navigate("/");
   }, [currentUser, navigate]);
@@ -91,12 +99,142 @@ const AdminStock = () => {
     }
   };
 
+  const runAiAudit = async () => {
+    setAiAuditLoading(true);
+    try {
+      const token = localStorage.getItem("jwtToken");
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${BASE_URL}/api/products/inventory/ai-audit`, {
+        method: "POST",
+        headers,
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiAuditData(data.data);
+        if (data.stats) {
+          setInsights((prev) => ({ ...prev, stats: data.stats }));
+        }
+        toast.success("✨ AI Inventory Audit completed!");
+      } else {
+        toast.error(`AI Audit: ${data.message}`);
+      }
+    } catch (err) {
+      toast.error(`AI Audit Error: ${err.message}`);
+    } finally {
+      setAiAuditLoading(false);
+    }
+  };
+
+  const askStockAi = async (questionToAsk) => {
+    const q = (questionToAsk || askInput).trim();
+    if (!q || askLoading) return;
+    setAskLoading(true);
+    setAskAnswer("");
+    try {
+      const token = localStorage.getItem("jwtToken");
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${BASE_URL}/api/products/inventory/ai-ask`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ question: q }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAskAnswer(data.answer);
+      } else {
+        setAskAnswer(`⚠️ ${data.message}`);
+      }
+    } catch (err) {
+      setAskAnswer(`⚠️ Network error: ${err.message}`);
+    } finally {
+      setAskLoading(false);
+    }
+  };
+
+  const handleVoiceAsk = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.info("Voice recognition not supported in this browser. Try Chrome or Edge!");
+      return;
+    }
+
+    if (isVoiceAsking) {
+      setIsVoiceAsking(false);
+      return;
+    }
+
+    try {
+      const rec = new SpeechRecognition();
+      rec.lang = "en-IN";
+      rec.interimResults = false;
+      rec.onstart = () => setIsVoiceAsking(true);
+      rec.onresult = (e) => {
+        const transcript = e.results[0][0].transcript;
+        setAskInput(transcript);
+        setIsVoiceAsking(false);
+        askStockAi(transcript);
+      };
+      rec.onerror = () => setIsVoiceAsking(false);
+      rec.onend = () => setIsVoiceAsking(false);
+      rec.start();
+    } catch (e) {
+      console.error(e);
+      setIsVoiceAsking(false);
+    }
+  };
+
+  const handleApplyPricingSuggestion = async (productId, discount) => {
+    if (!productId || !discount) return;
+    setApplyingSuggestionId(productId);
+    try {
+      const headers = { "Content-Type": "application/json" };
+      const token = localStorage.getItem("jwtToken");
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${BASE_URL}/api/products/${productId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ discount: Number(discount) }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`🏷️ Applied ${discount}% clearance discount!`);
+        fetchProducts();
+        runAiAudit();
+      } else {
+        toast.error(data.message || "Failed to update discount");
+      }
+    } catch {
+      toast.error("Failed to update discount");
+    } finally {
+      setApplyingSuggestionId(null);
+    }
+  };
+
+  const handleApplyRestockSuggestion = async (productId, suggestedQty) => {
+    const product = products.find((p) => p._id === productId);
+    const currentStock = product ? (product.stock || 0) : 0;
+    const newStock = currentStock + (Number(suggestedQty) || 15);
+    await handleStockChange(productId, newStock, `AI Recommended Restock (+${suggestedQty})`);
+  };
+
   useEffect(() => {
     fetchProducts();
     dispatch(fetchCategories());
     fetchMovements();
     fetchInsights();
   }, [dispatch]);
+
+  // Auto-run AI audit when opening advisor tab if not yet loaded
+  useEffect(() => {
+    if (activeTab === "advisor" && !aiAuditData && !aiAuditLoading) {
+      runAiAudit();
+    }
+  }, [activeTab]);
 
   // Derived categories
   const categoryNames = dbCategories
@@ -745,101 +883,320 @@ const AdminStock = () => {
         {/* ── TAB 2: AI INVENTORY COPILOT & ADVISOR ───────────────────────────── */}
         {activeTab === "advisor" && (
           <div className="ai-advisor-panel">
+            {/* Executive AI Header */}
             <div className="ai-panel-header glass-card p-4 mb-4">
               <div className="ai-header-info">
-                <span className="ai-brain-icon">🧠</span>
+                <span className="ai-brain-icon">✨</span>
                 <div>
-                  <h4>AI Predictive IMS Advisor</h4>
-                  <p>Smart restock triggers, dynamic pricing matrix strategies, and locked asset rescue plans.</p>
+                  <h4 className="mb-1">AI Inventory Intelligence & Predictive Advisor</h4>
+                  <p className="mb-0 text-muted">
+                    Real-time stockout forecasts, dead-stock capital liberation, and automated 1-click reorders powered by Gemini AI.
+                  </p>
                 </div>
               </div>
-              <button className="as-btn as-btn-primary" onClick={fetchInsights} disabled={insightsLoading}>
-                {insightsLoading ? "Analyzing..." : "🔄 Refresh Analysis"}
+              <button
+                className={`as-btn as-btn-primary ${aiAuditLoading ? "as-btn-loading" : ""}`}
+                onClick={runAiAudit}
+                disabled={aiAuditLoading}
+              >
+                {aiAuditLoading ? (
+                  <><span className="ai-spinner me-2" /> Running Deep Audit…</>
+                ) : (
+                  <>✨ Run AI Inventory Audit</>
+                )}
               </button>
             </div>
 
-            {insightsLoading ? (
+            {/* 🎙️ Natural Language & Voice "Ask Stock AI" Bar */}
+            <div className="ai-ask-bar glass-card p-4 mb-4">
+              <div className="d-flex align-items-center justify-content-between mb-2">
+                <div className="d-flex align-items-center gap-2">
+                  <span className="ai-ask-icon">💬</span>
+                  <h6 className="mb-0 font-bold">Ask Stock AI Assistant</h6>
+                </div>
+                <span className="text-xs text-muted">🎙️ Voice & natural language warehouse assistant</span>
+              </div>
+
+              <form
+                className="ai-ask-form d-flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  askStockAi();
+                }}
+              >
+                <button
+                  type="button"
+                  className={`as-voice-btn ${isVoiceAsking ? "listening" : ""}`}
+                  onClick={handleVoiceAsk}
+                  title={isVoiceAsking ? "Stop Listening" : "Speak Voice Command"}
+                >
+                  {isVoiceAsking ? "🛑" : "🎙️"}
+                </button>
+                <input
+                  type="text"
+                  className="as-input flex-grow-1"
+                  value={askInput}
+                  onChange={(e) => setAskInput(e.target.value)}
+                  placeholder={isVoiceAsking ? "Listening to your voice command..." : "e.g. Which category has the most unsold capital? or What should I restock?"}
+                  disabled={askLoading}
+                />
+                <button
+                  type="submit"
+                  className="as-btn as-btn-primary px-4"
+                  disabled={!askInput.trim() || askLoading}
+                >
+                  {askLoading ? "Searching..." : "Ask AI"}
+                </button>
+              </form>
+
+              {/* Quick Prompt Chips */}
+              <div className="ai-ask-chips d-flex flex-wrap gap-2 mt-3">
+                {[
+                  "Which items are in danger of stocking out?",
+                  "How much dead stock do we have right now?",
+                  "What is our highest-value inventory category?",
+                  "Suggest clearance sales for this weekend",
+                ].map((chip, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="ai-ask-chip"
+                    onClick={() => {
+                      setAskInput(chip);
+                      askStockAi(chip);
+                    }}
+                    disabled={askLoading}
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              {/* AI Answer Box */}
+              {askAnswer && (
+                <div className="ai-answer-box mt-3 p-3 glass-card">
+                  <div className="d-flex align-items-center gap-2 text-primary font-bold mb-1">
+                    <span>🤖 Nilex Stock AI</span>
+                  </div>
+                  <p className="mb-0 text-dark" style={{ whiteSpace: "pre-wrap", fontSize: "14px", lineHeight: "1.6" }}>
+                    {askAnswer}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {aiAuditLoading && !aiAuditData ? (
               <div className="as-loader-container">
                 <div className="as-spinner" />
-                <p>Generating mathematical predictive insights...</p>
+                <p>Gemini AI is auditing inventory velocities, profit valuations, and stock health...</p>
               </div>
             ) : (
               <div className="insights-workspace">
-                <div className="row g-4">
-                  {/* Left Column: List of Smart Suggestions */}
-                  <div className="col-lg-8">
-                    <h5 className="section-subtitle">🎯 AI Action Recommendations</h5>
-                    {insights?.suggestions?.length === 0 ? (
-                      <div className="glass-card p-5 text-center text-muted">
-                        No immediate anomalies or risks found in inventory velocities! Your warehouse levels are perfectly balanced.
+                {/* Health Score & Key Financial Metrics Banner */}
+                <div className="row g-3 mb-4">
+                  <div className="col-md-3">
+                    <div className="glass-card p-3 d-flex align-items-center gap-3">
+                      <div className="health-score-badge">
+                        <span className="health-score-num">{aiAuditData?.healthScore || 85}</span>
+                        <span className="health-score-denom">/100</span>
                       </div>
-                    ) : (
-                      <div className="suggestions-list d-flex flex-column gap-3">
-                        {insights.suggestions.map((s, index) => {
-                          const isApplying = applyingSuggestionId === s.productId;
-                          return (
-                            <div key={index} className={`suggestion-card border-left-${s.severity || 'info'} glass-card p-4 d-flex justify-content-between align-items-start`}>
-                              <div className="suggestion-details">
-                                <span className={`severity-tag severity-${s.severity || 'info'}`}>{s.severity} urgency</span>
-                                <h6 className="suggestion-title mt-2">{s.message}</h6>
-                                <p className="suggestion-recommendation">{s.recommendation}</p>
-                                {s.estimatedCost && <div className="suggestion-metric text-blue font-bold">Estimated Cost: ₹{s.estimatedCost.toLocaleString()}</div>}
-                                {s.potentialRevenue && <div className="suggestion-metric text-emerald font-bold">Potential Revenue Recovery: ₹{s.potentialRevenue.toLocaleString()}</div>}
+                      <div>
+                        <span className="stat-label">Health Score</span>
+                        <h6 className="mb-0 font-bold text-success">{aiAuditData?.healthStatus || "Good Health"}</h6>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="col-md-3">
+                    <div className="glass-card p-3">
+                      <span className="stat-label">Total Stock Assets</span>
+                      <h5 className="mb-0 text-primary font-bold">
+                        ₹{insights?.stats?.totalValuation?.toLocaleString() || lockedCapital.toLocaleString()}
+                      </h5>
+                      <span className="text-xs text-muted">{products.length} catalog items</span>
+                    </div>
+                  </div>
+
+                  <div className="col-md-3">
+                    <div className="glass-card p-3">
+                      <span className="stat-label">Locked in Dead Stock</span>
+                      <h5 className="mb-0 text-danger font-bold">
+                        ₹{aiAuditData?.lockedCapitalInDeadStock?.toLocaleString() || (aiAuditData?.deadStockAlerts?.reduce((s, a) => s + (a.lockedCapital || 0), 0) || 0).toLocaleString()}
+                      </h5>
+                      <span className="text-xs text-muted">Capital eligible for liquidation</span>
+                    </div>
+                  </div>
+
+                  <div className="col-md-3">
+                    <div className="glass-card p-3">
+                      <span className="stat-label">Critical Restock Alerts</span>
+                      <h5 className="mb-0 text-warning font-bold">
+                        {aiAuditData?.restockAlerts?.length || 0} Products
+                      </h5>
+                      <span className="text-xs text-muted">Immediate replenishment required</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Executive Summary Briefing */}
+                {aiAuditData?.executiveSummary && (
+                  <div className="glass-card p-4 mb-4 border-left-info">
+                    <div className="d-flex align-items-center gap-2 mb-2">
+                      <span className="badge bg-primary text-white">📋 Executive AI Briefing</span>
+                    </div>
+                    <p className="mb-0 text-dark" style={{ fontSize: "14.5px", lineHeight: "1.6" }}>
+                      {aiAuditData.executiveSummary}
+                    </p>
+                  </div>
+                )}
+
+                <div className="row g-4">
+                  {/* Left Column: Restock & Dead Stock Action Cards */}
+                  <div className="col-lg-8">
+                    {/* 🚨 High Priority Restock Section */}
+                    <div className="mb-4">
+                      <div className="d-flex align-items-center justify-content-between mb-3">
+                        <h5 className="section-subtitle mb-0">🚨 Predictive Restock Alerts</h5>
+                        <span className="badge bg-danger">Action Recommended</span>
+                      </div>
+
+                      {(!aiAuditData?.restockAlerts || aiAuditData.restockAlerts.length === 0) ? (
+                        <div className="glass-card p-4 text-center text-muted">
+                          ✅ No immediate stockout risks detected. All active products have sufficient buffer.
+                        </div>
+                      ) : (
+                        <div className="d-flex flex-column gap-3">
+                          {aiAuditData.restockAlerts.map((item, idx) => (
+                            <div key={idx} className="suggestion-card glass-card p-4 border-left-high d-flex justify-content-between align-items-start gap-3">
+                              <div className="flex-grow-1">
+                                <div className="d-flex align-items-center gap-2 mb-1">
+                                  <span className="severity-tag severity-high">{item.urgency || "High"} Urgency</span>
+                                  <span className="text-xs text-muted">Current Stock: <strong>{item.currentStock}</strong> units</span>
+                                </div>
+                                <h6 className="font-bold text-dark mb-1">{item.productName}</h6>
+                                <p className="text-sm text-secondary mb-2">{item.reasoning}</p>
+                                {item.estimatedCost && (
+                                  <div className="text-xs text-primary font-bold">
+                                    Estimated Restock Investment: ₹{item.estimatedCost.toLocaleString()}
+                                  </div>
+                                )}
                               </div>
-                              <div className="suggestion-actions">
-                                {s.type === 'discount' && (
-                                  <button 
-                                    className="as-btn as-btn-primary py-2 px-3 text-xs" 
-                                    onClick={() => handleApplyPricingSuggestion(s.productId, s.actionDiscount)}
-                                    disabled={isApplying}
-                                  >
-                                    {isApplying ? "Applying..." : `🏷️ Apply ${s.actionDiscount}% Discount`}
-                                  </button>
+
+                              <button
+                                className="as-btn as-btn-primary py-2 px-3 text-xs flex-shrink-0"
+                                onClick={() => handleApplyRestockSuggestion(item.productId, item.suggestedRestockQty || 20)}
+                                disabled={updatingStockId === item.productId}
+                                title={`Add ${item.suggestedRestockQty || 20} units directly to stock`}
+                              >
+                                {updatingStockId === item.productId ? (
+                                  "Updating…"
+                                ) : (
+                                  `⚡ 1-Click Restock (+${item.suggestedRestockQty || 20})`
                                 )}
-                                {s.type === 'restock' && (
-                                  <button 
-                                    className="as-btn as-btn-secondary py-2 px-3 text-xs"
-                                    onClick={() => handleStockChange(s.productId, 20, "AI Recommended Restock")}
-                                    disabled={updatingStockId === s.productId}
-                                  >
-                                    {updatingStockId === s.productId ? "Syncing..." : "⚡ Replenish (+20)"}
-                                  </button>
-                                )}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 🧊 Dead Stock Liquidation Section */}
+                    <div>
+                      <div className="d-flex align-items-center justify-content-between mb-3">
+                        <h5 className="section-subtitle mb-0">🧊 Dead Stock Liquidation Strategies</h5>
+                        <span className="badge bg-warning text-dark">Unlock Cashflow</span>
+                      </div>
+
+                      {(!aiAuditData?.deadStockAlerts || aiAuditData.deadStockAlerts.length === 0) ? (
+                        <div className="glass-card p-4 text-center text-muted">
+                          ✅ Inventory turnover is healthy! No stagnant dead stock identified.
+                        </div>
+                      ) : (
+                        <div className="d-flex flex-column gap-3">
+                          {aiAuditData.deadStockAlerts.map((item, idx) => {
+                            const isApplying = applyingSuggestionId === item.productId;
+                            return (
+                              <div key={idx} className="suggestion-card glass-card p-4 border-left-medium d-flex justify-content-between align-items-start gap-3">
+                                <div className="flex-grow-1">
+                                  <div className="d-flex align-items-center gap-2 mb-1">
+                                    <span className="severity-tag severity-medium">Stagnant Stock</span>
+                                    <span className="text-xs text-muted">Stock: <strong>{item.currentStock}</strong> units</span>
+                                    {item.lockedCapital && (
+                                      <span className="text-xs text-danger font-bold">
+                                        (₹{item.lockedCapital.toLocaleString()} locked)
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h6 className="font-bold text-dark mb-1">{item.productName}</h6>
+                                  <p className="text-sm text-secondary mb-2">{item.actionPlan}</p>
+                                </div>
+
+                                <button
+                                  className="as-btn as-btn-secondary py-2 px-3 text-xs flex-shrink-0"
+                                  onClick={() => handleApplyPricingSuggestion(item.productId, item.suggestedDiscount || 15)}
+                                  disabled={isApplying}
+                                  title={`Apply ${item.suggestedDiscount || 15}% clearance discount`}
+                                >
+                                  {isApplying ? "Applying…" : `🏷️ Apply ${item.suggestedDiscount || 15}% Sale`}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: Seasonal Demand Trends & Category Valuations */}
+                  <div className="col-lg-4">
+                    {/* 📈 Seasonal Insights */}
+                    <div className="glass-card p-4 mb-4">
+                      <h6 className="section-subtitle d-flex align-items-center gap-2 mb-3">
+                        <span>📈</span> Seasonal Demand Forecast
+                      </h6>
+
+                      {(!aiAuditData?.seasonalTips || aiAuditData.seasonalTips.length === 0) ? (
+                        <p className="text-sm text-muted mb-0">
+                          Demand across all primary categories is steady for the current retail quarter.
+                        </p>
+                      ) : (
+                        <div className="d-flex flex-column gap-3">
+                          {aiAuditData.seasonalTips.map((tip, idx) => (
+                            <div key={idx} className="seasonal-tip-card p-3 rounded bg-light border">
+                              <span className="badge bg-primary text-white mb-1">{tip.category}</span>
+                              <p className="text-xs text-dark mb-1 font-bold">{tip.trendAdvice}</p>
+                              <p className="text-xs text-muted mb-0">{tip.recommendation}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 📊 Category Asset Distribution */}
+                    <div className="glass-card p-4">
+                      <h6 className="section-subtitle mb-3">📊 Category Asset Distribution</h6>
+                      <div className="d-flex flex-column gap-3">
+                        {Object.entries(categorySummaryMap).map(([cat, info]) => {
+                          const catVal = products
+                            .filter((p) => p.category === cat)
+                            .reduce((s, p) => s + (p.stock || 0) * p.price, 0);
+                          const percentage = lockedCapital > 0 ? Math.round((catVal / lockedCapital) * 100) : 0;
+
+                          return (
+                            <div key={cat} className="category-val-item">
+                              <div className="d-flex justify-content-between text-xs mb-1">
+                                <span className="font-bold">{cat}</span>
+                                <span className="text-primary font-bold">₹{catVal.toLocaleString()} ({percentage}%)</span>
+                              </div>
+                              <div className="progress" style={{ height: "6px" }}>
+                                <div
+                                  className="progress-bar bg-primary"
+                                  style={{ width: `${percentage}%` }}
+                                />
                               </div>
                             </div>
                           );
                         })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right Column: AI Model Summary Stats */}
-                  <div className="col-lg-4">
-                    <h5 className="section-subtitle">📊 Warehouse Health Summary</h5>
-                    <div className="glass-card p-4 d-flex flex-column gap-3">
-                      <div className="health-stat">
-                        <span className="health-stat-label">Total Assets Valuation</span>
-                        <h4 className="health-stat-val text-blue">₹{insights?.stats?.totalValuation?.toLocaleString() || "0"}</h4>
-                      </div>
-                      <div className="health-stat">
-                        <span className="health-stat-label">Items Stagnant (Dead Stock)</span>
-                        <h4 className="health-stat-val text-orange">
-                          {insights?.suggestions?.filter(s => s.type === 'discount').length || 0} Products
-                        </h4>
-                      </div>
-                      <div className="health-stat">
-                        <span className="health-stat-label">Restock Triggers Active</span>
-                        <h4 className="health-stat-val text-red">
-                          {insights?.suggestions?.filter(s => s.type === 'restock').length || 0} Products
-                        </h4>
-                      </div>
-
-                      <div className="health-gauge mt-2">
-                        <span className="stat-sm-label">STOCK TURNOVER RATIO</span>
-                        <div className="gauge-outer mt-2">
-                          <div className="gauge-fill bg-success" style={{ width: '85%' }} />
-                        </div>
-                        <span className="stat-xs-desc mt-1 block">85% inventory efficiency based on recent billings.</span>
                       </div>
                     </div>
                   </div>
